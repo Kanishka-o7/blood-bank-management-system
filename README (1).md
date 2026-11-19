@@ -54,4 +54,4 @@ The password can be changed from the **Settings** page after logging in.
 
 ## Author
 
-Your Name – B.Tech CSE, Semester III
+kanishka – B.Tech CSE, Semester III

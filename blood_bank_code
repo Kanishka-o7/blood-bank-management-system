@@ -1,0 +1,944 @@
+
+import tkinter as tk
+from tkinter import ttk, messagebox
+from collections import deque
+
+BLOOD_GROUPS = ["A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-"]
+
+# ---------- colours ----------
+RED = "#c62828"
+DARK = "#263238"
+LIGHT = "#f4f6f8"
+WHITE = "#ffffff"
+GREEN = "#2e7d32"
+BLUE = "#1565c0"
+ORANGE = "#ef6c00"
+GREY = "#757575"
+
+FONT = "Segoe UI"
+
+# admin login details (password can be changed from the Settings page)
+credentials = {"username": "admin", "password": "admin123"}
+
+
+# ---------------------------------------------------------------
+# 1. LINKED LIST for donors
+# ---------------------------------------------------------------
+class DonorNode:
+    def __init__(self, name, age, group, phone, city):
+        self.name = name
+        self.age = age
+        self.group = group
+        self.phone = phone
+        self.city = city
+        self.next = None          # points to the next donor
+
+
+class DonorList:
+    def __init__(self):
+        self.head = None
+
+    def add(self, name, age, group, phone, city):
+        new_node = DonorNode(name, age, group, phone, city)
+        if self.head is None:
+            self.head = new_node
+            return
+        current = self.head
+        while current.next is not None:   # go to the last node
+            current = current.next
+        current.next = new_node
+
+    def find(self, phone):
+        """Return the node with this phone number (or None)."""
+        current = self.head
+        while current is not None:
+            if current.phone == phone:
+                return current
+            current = current.next
+        return None
+
+    def update(self, old_phone, name, age, group, phone, city):
+        node = self.find(old_phone)
+        if node is None:
+            return False
+        if phone != old_phone and self.find(phone) is not None:
+            return False                  # new phone already used
+        node.name = name
+        node.age = age
+        node.group = group
+        node.phone = phone
+        node.city = city
+        return True
+
+    def delete(self, phone):
+        """Delete donor using phone number (phone is unique)."""
+        current = self.head
+        previous = None
+        while current is not None:
+            if current.phone == phone:
+                if previous is None:
+                    self.head = current.next
+                else:
+                    previous.next = current.next
+                return True
+            previous = current
+            current = current.next
+        return False
+
+    def to_list(self):
+        """Convert linked list to a normal Python list."""
+        result = []
+        current = self.head
+        while current is not None:
+            result.append(current)
+            current = current.next
+        return result
+
+    def search_by_group(self, group):
+        """Linear search."""
+        result = []
+        current = self.head
+        while current is not None:
+            if current.group == group:
+                result.append(current)
+            current = current.next
+        return result
+
+
+# ---------------------------------------------------------------
+# 5 and 6. SORTING and BINARY SEARCH
+# ---------------------------------------------------------------
+def bubble_sort_by_name(donor_items):
+    donor_items = donor_items[:]          # copy, so original is not changed
+    n = len(donor_items)
+    for i in range(n):
+        for j in range(0, n - i - 1):
+            if donor_items[j].name.lower() > donor_items[j + 1].name.lower():
+                donor_items[j], donor_items[j + 1] = donor_items[j + 1], donor_items[j]
+    return donor_items
+
+
+def binary_search_by_name(sorted_donors, name):
+    """List must already be sorted by name. Returns all matches."""
+    name = name.lower()
+    low = 0
+    high = len(sorted_donors) - 1
+    while low <= high:
+        mid = (low + high) // 2
+        mid_name = sorted_donors[mid].name.lower()
+        if mid_name == name:
+            # donors can have the same name, so check both sides
+            found = [sorted_donors[mid]]
+            left = mid - 1
+            while left >= 0 and sorted_donors[left].name.lower() == name:
+                found.append(sorted_donors[left])
+                left -= 1
+            right = mid + 1
+            while right < len(sorted_donors) and sorted_donors[right].name.lower() == name:
+                found.append(sorted_donors[right])
+                right += 1
+            return found
+        elif mid_name < name:
+            low = mid + 1
+        else:
+            high = mid - 1
+    return []
+
+
+# ---------------------------------------------------------------
+# Data of the blood bank
+# ---------------------------------------------------------------
+donors = DonorList()                                   # linked list
+stock = {group: 0 for group in BLOOD_GROUPS}           # hash table
+requests = deque()                                     # queue
+undo_stack = []                                        # stack
+
+# sample data so the project does not look empty
+donors.add("Aman Sharma", 21, "O+", "9810000001", "Delhi")
+donors.add("Riya Verma", 24, "A+", "9810000002", "Noida")
+donors.add("Karan Singh", 30, "B+", "9810000003", "Gurgaon")
+donors.add("Neha Gupta", 27, "O+", "9810000004", "Delhi")
+donors.add("Zoya Khan", 22, "AB-", "9810000005", "Delhi")
+stock["O+"] = 8
+stock["A+"] = 5
+stock["B+"] = 3
+stock["AB-"] = 1
+stock["O-"] = 6
+requests.append(("Rohit Mehra", "B+", 2))
+
+# all the widgets we need to update later are kept in this dictionary
+ui = {}
+
+
+# ---------------------------------------------------------------
+# Small helper functions to make good looking widgets
+# ---------------------------------------------------------------
+def darker(color):
+    """Make a hex colour a bit darker (used for button hover)."""
+    r = int(color[1:3], 16)
+    g = int(color[3:5], 16)
+    b = int(color[5:7], 16)
+    return "#%02x%02x%02x" % (int(r * 0.8), int(g * 0.8), int(b * 0.8))
+
+
+def make_button(parent, text, color, command):
+    btn = tk.Button(parent, text=text, bg=color, fg="white",
+                    activebackground=darker(color), activeforeground="white",
+                    font=(FONT, 10, "bold"), relief="flat", bd=0,
+                    padx=14, pady=6, cursor="hand2", command=command)
+    btn.bind("<Enter>", lambda e: btn.config(bg=darker(color)))
+    btn.bind("<Leave>", lambda e: btn.config(bg=color))
+    return btn
+
+
+def make_entry(parent, width, show=""):
+    return tk.Entry(parent, width=width, font=(FONT, 10), relief="solid",
+                    bd=1, show=show)
+
+
+def make_label(parent, text, bg=WHITE):
+    return tk.Label(parent, text=text, bg=bg, fg=DARK, font=(FONT, 10))
+
+
+def make_card(parent, title):
+    """White box with a heading, used for forms."""
+    box = tk.Frame(parent, bg=WHITE, highlightbackground="#dddddd",
+                   highlightthickness=1)
+    tk.Label(box, text=title, bg=WHITE, fg=RED,
+             font=(FONT, 11, "bold")).pack(anchor="w", padx=12, pady=(8, 0))
+    inner = tk.Frame(box, bg=WHITE)
+    inner.pack(fill="x", padx=12, pady=8)
+    return box, inner
+
+
+def make_table(parent, columns, widths, height=10):
+    frame = tk.Frame(parent, bg=LIGHT)
+    table = ttk.Treeview(frame, columns=columns, show="headings", height=height)
+    scroll = ttk.Scrollbar(frame, orient="vertical", command=table.yview)
+    table.configure(yscrollcommand=scroll.set)
+    for col, w in zip(columns, widths):
+        table.heading(col, text=col)
+        table.column(col, width=w, anchor="center")
+    table.pack(side="left", fill="both", expand=True)
+    scroll.pack(side="right", fill="y")
+    return frame, table
+
+
+def clear_window():
+    for widget in root.winfo_children():
+        widget.destroy()
+
+
+# ---------------------------------------------------------------
+# LOGIN SCREEN
+# ---------------------------------------------------------------
+def login_screen():
+    clear_window()
+    ui.clear()
+    root.configure(bg=DARK)
+
+    card = tk.Frame(root, bg=WHITE, padx=45, pady=30)
+    card.place(relx=0.5, rely=0.5, anchor="center")
+
+    # blood drop logo drawn with a canvas
+    drop = tk.Canvas(card, width=60, height=75, bg=WHITE, highlightthickness=0)
+    drop.pack()
+    drop.create_polygon(30, 4, 10, 42, 50, 42, fill=RED, outline=RED)
+    drop.create_oval(8, 28, 52, 70, fill=RED, outline=RED)
+    drop.create_oval(17, 44, 25, 56, fill="#ff8a80", outline="#ff8a80")
+
+    tk.Label(card, text="Blood Bank Management System", bg=WHITE, fg=DARK,
+             font=(FONT, 16, "bold")).pack(pady=(5, 0))
+    tk.Label(card, text="Please login to continue", bg=WHITE, fg=GREY,
+             font=(FONT, 10)).pack(pady=(0, 15))
+
+    tk.Label(card, text="Username", bg=WHITE, fg=DARK, anchor="w",
+             font=(FONT, 10)).pack(fill="x")
+    user_entry = make_entry(card, 32)
+    user_entry.pack(pady=(0, 10), ipady=4)
+
+    tk.Label(card, text="Password", bg=WHITE, fg=DARK, anchor="w",
+             font=(FONT, 10)).pack(fill="x")
+    pass_entry = make_entry(card, 32, show="*")
+    pass_entry.pack(ipady=4)
+
+    show_var = tk.IntVar()
+
+    def toggle_password():
+        if show_var.get() == 1:
+            pass_entry.config(show="")
+        else:
+            pass_entry.config(show="*")
+
+    tk.Checkbutton(card, text="Show password", variable=show_var,
+                   command=toggle_password, bg=WHITE, activebackground=WHITE,
+                   font=(FONT, 9)).pack(anchor="w")
+
+    attempts = {"count": 0}
+
+    def enable_button():
+        if login_btn.winfo_exists():
+            login_btn.config(state="normal")
+
+    def try_login(event=None):
+        user = user_entry.get().strip()
+        password = pass_entry.get()
+        if user == credentials["username"] and password == credentials["password"]:
+            show_main("admin")
+            return
+        attempts["count"] += 1
+        left = 3 - attempts["count"]
+        if left <= 0:
+            attempts["count"] = 0
+            login_btn.config(state="disabled")
+            root.after(10000, enable_button)
+            messagebox.showerror("Locked", "Too many wrong attempts.\n"
+                                 "Login is disabled for 10 seconds.")
+        else:
+            messagebox.showerror("Login Failed", "Wrong username or password.\n"
+                                 "Attempts left: " + str(left))
+
+    login_btn = make_button(card, "LOGIN AS ADMIN", RED, try_login)
+    login_btn.pack(fill="x", pady=(14, 6))
+    make_button(card, "Continue as Visitor", DARK,
+                lambda: show_main("visitor")).pack(fill="x")
+
+    user_entry.bind("<Return>", try_login)
+    pass_entry.bind("<Return>", try_login)
+    user_entry.focus()
+
+
+# ---------------------------------------------------------------
+# MAIN SCREEN (sidebar + pages)
+# ---------------------------------------------------------------
+def show_main(role):
+    clear_window()
+    ui.clear()
+    root.configure(bg=LIGHT)
+    is_admin = (role == "admin")
+
+    # ----- sidebar -----
+    sidebar = tk.Frame(root, bg=DARK, width=215)
+    sidebar.pack(side="left", fill="y")
+    sidebar.pack_propagate(False)
+
+    logo = tk.Canvas(sidebar, width=215, height=95, bg=DARK, highlightthickness=0)
+    logo.pack()
+    logo.create_polygon(40, 22, 28, 48, 52, 48, fill=RED, outline=RED)
+    logo.create_oval(27, 38, 53, 64, fill=RED, outline=RED)
+    logo.create_text(65, 40, text="BLOOD BANK", fill="white", anchor="w",
+                     font=(FONT, 13, "bold"))
+    logo.create_text(65, 60, text="Management System", fill="#b0bec5", anchor="w",
+                     font=(FONT, 8))
+
+    # ----- right side -----
+    right = tk.Frame(root, bg=LIGHT)
+    right.pack(side="right", fill="both", expand=True)
+
+    header = tk.Frame(right, bg=WHITE, height=58)
+    header.pack(fill="x")
+    header.pack_propagate(False)
+    page_title = tk.Label(header, text="", bg=WHITE, fg=DARK,
+                          font=(FONT, 16, "bold"))
+    page_title.pack(side="left", padx=20)
+    if is_admin:
+        role_text = "Logged in as: Admin"
+        role_color = GREEN
+    else:
+        role_text = "Visitor (view only)"
+        role_color = ORANGE
+    tk.Label(header, text=role_text, bg=WHITE, fg=role_color,
+             font=(FONT, 10, "bold")).pack(side="right", padx=20)
+
+    body = tk.Frame(right, bg=LIGHT)
+    body.pack(fill="both", expand=True, padx=20, pady=15)
+
+    # ----- build the pages -----
+    pages = {}
+    titles = {}
+    pages["dashboard"] = build_dashboard(body)
+    titles["dashboard"] = "Dashboard"
+    pages["donors"] = build_donors_page(body, is_admin)
+    titles["donors"] = "Donors" if is_admin else "Search Donors"
+    pages["stock"] = build_stock_page(body, is_admin)
+    titles["stock"] = "Blood Stock"
+    nav_items = [("Dashboard", "dashboard"), (titles["donors"], "donors"),
+                 ("Blood Stock", "stock")]
+    if is_admin:
+        pages["requests"] = build_requests_page(body)
+        titles["requests"] = "Blood Requests"
+        pages["settings"] = build_settings_page(body)
+        titles["settings"] = "Settings"
+        nav_items.append(("Blood Requests", "requests"))
+        nav_items.append(("Settings", "settings"))
+
+    nav_buttons = {}
+
+    def show_page(key):
+        for name in pages:
+            pages[name].pack_forget()
+            nav_buttons[name].config(bg=DARK)
+        pages[key].pack(fill="both", expand=True)
+        nav_buttons[key].config(bg=RED)
+        page_title.config(text=titles[key])
+
+    for text, key in nav_items:
+        btn = tk.Button(sidebar, text="   " + text, anchor="w", bg=DARK,
+                        fg="white", activebackground=RED,
+                        activeforeground="white", relief="flat", bd=0,
+                        font=(FONT, 11), padx=10, pady=10, cursor="hand2",
+                        command=lambda k=key: show_page(k))
+        btn.pack(fill="x")
+        nav_buttons[key] = btn
+
+    def logout():
+        if messagebox.askyesno("Logout", "Do you want to logout?"):
+            login_screen()
+
+    make_button(sidebar, "Logout", "#455a64", logout).pack(side="bottom",
+                                                           fill="x", padx=15, pady=15)
+
+    refresh_dashboard()
+    refresh_stock()
+    refresh_requests()
+    show_donors(donors.to_list())
+    show_page("dashboard")
+
+
+# ---------------------------------------------------------------
+# DASHBOARD PAGE
+# ---------------------------------------------------------------
+def build_dashboard(parent):
+    page = tk.Frame(parent, bg=LIGHT)
+
+    cards = tk.Frame(page, bg=LIGHT)
+    cards.pack(fill="x")
+    ui["cards"] = {}
+    card_info = [("donors", "Total Donors", RED),
+                 ("units", "Units in Stock", GREEN),
+                 ("requests", "Pending Requests", BLUE),
+                 ("low", "Low Stock Groups", ORANGE)]
+    for key, text, color in card_info:
+        card = tk.Frame(cards, bg=WHITE, highlightbackground="#dddddd",
+                        highlightthickness=1)
+        card.pack(side="left", expand=True, fill="x", padx=6)
+        tk.Frame(card, bg=color, height=5).pack(fill="x")
+        value = tk.Label(card, text="0", bg=WHITE, fg=color,
+                         font=(FONT, 26, "bold"))
+        value.pack(pady=(10, 0))
+        tk.Label(card, text=text, bg=WHITE, fg=GREY,
+                 font=(FONT, 10)).pack(pady=(0, 10))
+        ui["cards"][key] = value
+
+    chart_box = tk.Frame(page, bg=WHITE, highlightbackground="#dddddd",
+                         highlightthickness=1)
+    chart_box.pack(fill="both", expand=True, padx=6, pady=(15, 0))
+    tk.Label(chart_box, text="Blood Stock Overview", bg=WHITE, fg=DARK,
+             font=(FONT, 12, "bold")).pack(anchor="w", padx=15, pady=(10, 0))
+    ui["chart"] = tk.Canvas(chart_box, width=780, height=270, bg=WHITE,
+                            highlightthickness=0)
+    ui["chart"].pack(pady=5)
+    return page
+
+
+def refresh_dashboard():
+    if "cards" not in ui:
+        return
+    total_units = 0
+    low_groups = 0
+    for group in BLOOD_GROUPS:
+        total_units += stock[group]
+        if stock[group] < 5:
+            low_groups += 1
+
+    ui["cards"]["donors"].config(text=str(len(donors.to_list())))
+    ui["cards"]["units"].config(text=str(total_units))
+    ui["cards"]["requests"].config(text=str(len(requests)))
+    ui["cards"]["low"].config(text=str(low_groups))
+
+    # ----- bar chart of the stock -----
+    canvas = ui["chart"]
+    canvas.delete("all")
+    biggest = max(max(stock.values()), 10)
+    canvas.create_line(30, 225, 760, 225, fill="#999999")
+    for i in range(len(BLOOD_GROUPS)):
+        group = BLOOD_GROUPS[i]
+        units = stock[group]
+        x = 55 + i * 88
+        bar_height = int(units / biggest * 170)
+        if units == 0:
+            color = "#bdbdbd"
+        elif units < 5:
+            color = ORANGE
+        else:
+            color = RED
+        canvas.create_rectangle(x, 225 - bar_height, x + 50, 225,
+                                fill=color, outline=color)
+        canvas.create_text(x + 25, 215 - bar_height, text=str(units),
+                           font=(FONT, 10, "bold"), fill=DARK)
+        canvas.create_text(x + 25, 245, text=group, font=(FONT, 10),
+                           fill=DARK)
+
+    # small legend
+    canvas.create_rectangle(560, 8, 572, 20, fill=RED, outline=RED)
+    canvas.create_text(578, 14, text="Good", anchor="w", font=(FONT, 9))
+    canvas.create_rectangle(625, 8, 637, 20, fill=ORANGE, outline=ORANGE)
+    canvas.create_text(643, 14, text="Low (<5)", anchor="w", font=(FONT, 9))
+    canvas.create_rectangle(705, 8, 717, 20, fill="#bdbdbd", outline="#bdbdbd")
+    canvas.create_text(723, 14, text="Empty", anchor="w", font=(FONT, 9))
+
+
+# ---------------------------------------------------------------
+# DONORS PAGE
+# ---------------------------------------------------------------
+def check_donor_fields(name, age, phone, city):
+    """Returns an error message, or None if everything is fine."""
+    if name == "" or age == "" or phone == "" or city == "":
+        return "Please fill all the fields"
+    if not age.isdigit() or not (18 <= int(age) <= 65):
+        return "Donor age must be between 18 and 65"
+    if not phone.isdigit() or len(phone) != 10:
+        return "Phone number must be 10 digits"
+    return None
+
+
+def show_donors(donor_items):
+    """Show a list of donors in the table."""
+    if "donor_table" not in ui:
+        return
+    table = ui["donor_table"]
+    for row in table.get_children():
+        table.delete(row)
+    for d in donor_items:
+        table.insert("", "end", iid=d.phone,
+                     values=(d.name, d.age, d.group, d.phone, d.city))
+    ui["donor_count"].config(text="Donors shown: " + str(len(donor_items)))
+
+
+def build_donors_page(parent, is_admin):
+    page = tk.Frame(parent, bg=LIGHT)
+
+    # ----- search box (everyone can use it) -----
+    search_box, search_inner = make_card(page, "Search Donors")
+    search_box.pack(fill="x", pady=(0, 10))
+
+    make_label(search_inner, "Name").grid(row=0, column=0, padx=(0, 5))
+    search_name = make_entry(search_inner, 18)
+    search_name.grid(row=0, column=1, ipady=3)
+    make_label(search_inner, "Blood Group").grid(row=0, column=3, padx=(15, 5))
+    search_group = ttk.Combobox(search_inner, values=BLOOD_GROUPS, width=5,
+                                state="readonly", font=(FONT, 10))
+    search_group.grid(row=0, column=4)
+    search_group.current(0)
+
+    def search_by_name():
+        name = search_name.get().strip()
+        if name == "":
+            messagebox.showerror("Error", "Enter a name to search")
+            return
+        sorted_list = bubble_sort_by_name(donors.to_list())   # sort first
+        result = binary_search_by_name(sorted_list, name)     # then binary search
+        show_donors(result)
+        if len(result) == 0:
+            messagebox.showinfo("Result", "No donor found with this name")
+
+    def search_by_group():
+        result = donors.search_by_group(search_group.get())
+        show_donors(result)
+        if len(result) == 0:
+            messagebox.showinfo("Result", "No donor found with this blood group")
+
+    make_button(search_inner, "Search Name", BLUE,
+                search_by_name).grid(row=0, column=2, padx=8)
+    make_button(search_inner, "Search Group", BLUE,
+                search_by_group).grid(row=0, column=5, padx=8)
+    make_button(search_inner, "Sort by Name", GREY,
+                lambda: show_donors(bubble_sort_by_name(donors.to_list()))
+                ).grid(row=0, column=6, padx=4)
+    make_button(search_inner, "Show All", GREY,
+                lambda: show_donors(donors.to_list())).grid(row=0, column=7, padx=4)
+
+    # ----- add / edit form (admin only) -----
+    if is_admin:
+        form_box, form = make_card(page, "Add / Edit Donor  (click a row in the table to edit it)")
+        form_box.pack(fill="x", pady=(0, 10))
+
+        make_label(form, "Name").grid(row=0, column=0, padx=(0, 5), pady=4)
+        name_entry = make_entry(form, 18)
+        name_entry.grid(row=0, column=1, ipady=3)
+        make_label(form, "Age").grid(row=0, column=2, padx=(15, 5))
+        age_entry = make_entry(form, 6)
+        age_entry.grid(row=0, column=3, ipady=3)
+        make_label(form, "Blood Group").grid(row=0, column=4, padx=(15, 5))
+        group_box = ttk.Combobox(form, values=BLOOD_GROUPS, width=5,
+                                 state="readonly", font=(FONT, 10))
+        group_box.grid(row=0, column=5)
+        group_box.current(0)
+
+        make_label(form, "Phone").grid(row=1, column=0, padx=(0, 5), pady=4)
+        phone_entry = make_entry(form, 18)
+        phone_entry.grid(row=1, column=1, ipady=3)
+        make_label(form, "City").grid(row=1, column=2, padx=(15, 5))
+        city_entry = make_entry(form, 15)
+        city_entry.grid(row=1, column=3, columnspan=2, sticky="w", ipady=3)
+
+        ui["editing"] = None          # phone of the donor being edited
+
+        def clear_form():
+            for box in (name_entry, age_entry, phone_entry, city_entry):
+                box.delete(0, tk.END)
+            group_box.current(0)
+            ui["editing"] = None
+
+        def add_donor():
+            name = name_entry.get().strip()
+            age = age_entry.get().strip()
+            phone = phone_entry.get().strip()
+            city = city_entry.get().strip()
+            error = check_donor_fields(name, age, phone, city)
+            if error:
+                messagebox.showerror("Error", error)
+                return
+            if donors.find(phone) is not None:
+                messagebox.showerror("Error", "A donor with this phone already exists")
+                return
+            donors.add(name, int(age), group_box.get(), phone, city)
+            show_donors(donors.to_list())
+            refresh_dashboard()
+            clear_form()
+            messagebox.showinfo("Done", "Donor added successfully")
+
+        def update_donor():
+            old_phone = ui["editing"]
+            if old_phone is None:
+                messagebox.showwarning("Select", "Click a donor in the table first")
+                return
+            name = name_entry.get().strip()
+            age = age_entry.get().strip()
+            phone = phone_entry.get().strip()
+            city = city_entry.get().strip()
+            error = check_donor_fields(name, age, phone, city)
+            if error:
+                messagebox.showerror("Error", error)
+                return
+            if donors.update(old_phone, name, int(age), group_box.get(), phone, city):
+                show_donors(donors.to_list())
+                clear_form()
+                messagebox.showinfo("Done", "Donor updated successfully")
+            else:
+                messagebox.showerror("Error", "This phone number is already used")
+
+        def delete_donor():
+            selected = donor_table.selection()
+            if not selected:
+                messagebox.showwarning("Select", "Click a donor in the table first")
+                return
+            if messagebox.askyesno("Delete", "Delete the selected donor?"):
+                donors.delete(selected[0])
+                show_donors(donors.to_list())
+                refresh_dashboard()
+                clear_form()
+
+        def on_select(event):
+            selected = donor_table.selection()
+            if not selected:
+                return
+            node = donors.find(selected[0])
+            if node is None:
+                return
+            clear_form()
+            name_entry.insert(0, node.name)
+            age_entry.insert(0, node.age)
+            phone_entry.insert(0, node.phone)
+            city_entry.insert(0, node.city)
+            group_box.set(node.group)
+            ui["editing"] = node.phone
+
+        buttons = tk.Frame(form, bg=WHITE)
+        buttons.grid(row=0, column=6, rowspan=2, padx=(20, 0))
+        make_button(buttons, "Add Donor", GREEN, add_donor).pack(fill="x", pady=2)
+        make_button(buttons, "Update Donor", BLUE, update_donor).pack(fill="x", pady=2)
+        make_button(buttons, "Clear", GREY, clear_form).pack(fill="x", pady=2)
+
+    # ----- bottom bar (packed first so it is never cut off) -----
+    bottom = tk.Frame(page, bg=LIGHT)
+    bottom.pack(side="bottom", fill="x", pady=(8, 0))
+    ui["donor_count"] = tk.Label(bottom, text="", bg=LIGHT, fg=GREY,
+                                 font=(FONT, 10))
+    ui["donor_count"].pack(side="left")
+
+    # ----- table -----
+    table_frame, donor_table = make_table(
+        page, ("Name", "Age", "Blood Group", "Phone", "City"),
+        (200, 70, 110, 140, 140), height=7)
+    table_frame.pack(fill="both", expand=True)
+    ui["donor_table"] = donor_table
+
+    if is_admin:
+        donor_table.bind("<<TreeviewSelect>>", on_select)
+        make_button(bottom, "Delete Selected Donor", RED,
+                    delete_donor).pack(side="right")
+    return page
+
+
+# ---------------------------------------------------------------
+# BLOOD STOCK PAGE
+# ---------------------------------------------------------------
+def refresh_stock():
+    if "stock_table" not in ui:
+        return
+    table = ui["stock_table"]
+    for row in table.get_children():
+        table.delete(row)
+    for group in BLOOD_GROUPS:
+        units = stock[group]
+        if units == 0:
+            status = "Out of stock"
+            tag = "empty"
+        elif units < 5:
+            status = "Low"
+            tag = "low"
+        else:
+            status = "Available"
+            tag = "good"
+        table.insert("", "end", values=(group, units, status), tags=(tag,))
+
+    if "history_box" in ui:
+        ui["history_box"].delete(0, tk.END)
+        for item in reversed(undo_stack):          # top of stack first
+            ui["history_box"].insert(tk.END, "  " + item[2])
+
+
+def build_stock_page(parent, is_admin):
+    page = tk.Frame(parent, bg=LIGHT)
+
+    table_frame, stock_table = make_table(
+        page, ("Blood Group", "Units Available", "Status"),
+        (200, 200, 200), height=8)
+    table_frame.pack(fill="x")
+    stock_table.tag_configure("good", foreground=GREEN)
+    stock_table.tag_configure("low", foreground=ORANGE)
+    stock_table.tag_configure("empty", foreground=RED)
+    ui["stock_table"] = stock_table
+
+    if not is_admin:
+        return page
+
+    box, form = make_card(page, "Add / Issue Blood")
+    box.pack(fill="x", pady=10)
+
+    make_label(form, "Blood Group").grid(row=0, column=0, padx=(0, 5))
+    group_box = ttk.Combobox(form, values=BLOOD_GROUPS, width=5,
+                             state="readonly", font=(FONT, 10))
+    group_box.grid(row=0, column=1)
+    group_box.current(0)
+    make_label(form, "Units").grid(row=0, column=2, padx=(15, 5))
+    units_entry = make_entry(form, 8)
+    units_entry.grid(row=0, column=3, ipady=3)
+
+    def get_units():
+        text = units_entry.get().strip()
+        if not text.isdigit() or int(text) <= 0:
+            messagebox.showerror("Error", "Enter a valid number of units")
+            return None
+        return int(text)
+
+    def after_stock_change():
+        units_entry.delete(0, tk.END)
+        refresh_stock()
+        refresh_dashboard()
+
+    def add_units():
+        units = get_units()
+        if units is None:
+            return
+        group = group_box.get()
+        stock[group] += units
+        undo_stack.append((group, units, "Added " + str(units) + " unit(s) of " + group))   # push
+        after_stock_change()
+
+    def issue_units():
+        units = get_units()
+        if units is None:
+            return
+        group = group_box.get()
+        if stock[group] < units:
+            messagebox.showerror("Error", "Only " + str(stock[group]) +
+                                 " unit(s) of " + group + " available")
+            return
+        stock[group] -= units
+        undo_stack.append((group, -units, "Issued " + str(units) + " unit(s) of " + group))  # push
+        after_stock_change()
+
+    def undo_last():
+        if len(undo_stack) == 0:
+            messagebox.showinfo("Undo", "Nothing to undo")
+            return
+        group, change, text = undo_stack.pop()        # pop from stack
+        if stock[group] - change < 0:
+            messagebox.showerror("Error", "Cannot undo, stock would become negative")
+            undo_stack.append((group, change, text))
+            return
+        stock[group] -= change                        # reverse the action
+        after_stock_change()
+
+    make_button(form, "Add Units", GREEN, add_units).grid(row=0, column=4, padx=(20, 5))
+    make_button(form, "Issue Units", BLUE, issue_units).grid(row=0, column=5, padx=5)
+    make_button(form, "Undo Last", ORANGE, undo_last).grid(row=0, column=6, padx=5)
+
+    tk.Label(page, text="Recent Activity  (Stack - latest on top)", bg=LIGHT,
+             fg=DARK, font=(FONT, 10, "bold")).pack(anchor="w")
+    ui["history_box"] = tk.Listbox(page, height=6, font=(FONT, 10), bd=1,
+                                   relief="solid", highlightthickness=0)
+    ui["history_box"].pack(fill="x", pady=(3, 0))
+    return page
+
+
+# ---------------------------------------------------------------
+# BLOOD REQUESTS PAGE (admin only)
+# ---------------------------------------------------------------
+def refresh_requests():
+    if "request_table" not in ui:
+        return
+    table = ui["request_table"]
+    for row in table.get_children():
+        table.delete(row)
+    position = 0
+    for r in requests:
+        table.insert("", "end", iid=str(position),
+                     values=(position + 1, r[0], r[1], r[2]))
+        position += 1
+
+
+def build_requests_page(parent):
+    page = tk.Frame(parent, bg=LIGHT)
+
+    box, form = make_card(page, "New Blood Request  (served first-come-first-served)")
+    box.pack(fill="x", pady=(0, 10))
+
+    make_label(form, "Patient Name").grid(row=0, column=0, padx=(0, 5))
+    patient_entry = make_entry(form, 18)
+    patient_entry.grid(row=0, column=1, ipady=3)
+    make_label(form, "Blood Group").grid(row=0, column=2, padx=(15, 5))
+    group_box = ttk.Combobox(form, values=BLOOD_GROUPS, width=5,
+                             state="readonly", font=(FONT, 10))
+    group_box.grid(row=0, column=3)
+    group_box.current(0)
+    make_label(form, "Units").grid(row=0, column=4, padx=(15, 5))
+    units_entry = make_entry(form, 6)
+    units_entry.grid(row=0, column=5, ipady=3)
+
+    def add_request():
+        patient = patient_entry.get().strip()
+        units = units_entry.get().strip()
+        if patient == "" or not units.isdigit() or int(units) <= 0:
+            messagebox.showerror("Error", "Enter patient name and valid units")
+            return
+        requests.append((patient, group_box.get(), int(units)))     # enqueue
+        patient_entry.delete(0, tk.END)
+        units_entry.delete(0, tk.END)
+        refresh_requests()
+        refresh_dashboard()
+
+    make_button(form, "Add Request", GREEN, add_request).grid(row=0, column=6, padx=(20, 0))
+
+    bottom = tk.Frame(page, bg=LIGHT)
+    bottom.pack(side="bottom", fill="x", pady=(8, 0))
+
+    table_frame, request_table = make_table(
+        page, ("Position", "Patient", "Blood Group", "Units"),
+        (100, 220, 130, 100), height=8)
+    table_frame.pack(fill="both", expand=True)
+    ui["request_table"] = request_table
+
+    def process_request():
+        if len(requests) == 0:
+            messagebox.showinfo("Queue", "No pending requests")
+            return
+        patient, group, units = requests[0]            # front of the queue
+        if stock[group] >= units:
+            requests.popleft()                         # dequeue
+            stock[group] -= units
+            undo_stack.append((group, -units, "Issued " + str(units) +
+                               " unit(s) of " + group + " to " + patient))
+            refresh_requests()
+            refresh_stock()
+            refresh_dashboard()
+            messagebox.showinfo("Done", "Request of " + patient + " completed")
+        else:
+            messagebox.showwarning("Not enough blood",
+                                   "Only " + str(stock[group]) + " unit(s) of " +
+                                   group + " available.\nThe request stays in the queue.")
+
+    def cancel_request():
+        selected = request_table.selection()
+        if not selected:
+            messagebox.showwarning("Select", "Click a request in the table first")
+            return
+        if messagebox.askyesno("Cancel", "Cancel the selected request?"):
+            del requests[int(selected[0])]
+            refresh_requests()
+            refresh_dashboard()
+
+    make_button(bottom, "Process Next Request", BLUE, process_request).pack(side="left")
+    make_button(bottom, "Cancel Selected", RED, cancel_request).pack(side="right")
+    return page
+
+
+# ---------------------------------------------------------------
+# SETTINGS PAGE (admin only) - change password
+# ---------------------------------------------------------------
+def build_settings_page(parent):
+    page = tk.Frame(parent, bg=LIGHT)
+
+    box, form = make_card(page, "Change Admin Password")
+    box.pack(anchor="nw", pady=5)
+
+    make_label(form, "Old Password").grid(row=0, column=0, sticky="w", pady=6)
+    old_entry = make_entry(form, 25, show="*")
+    old_entry.grid(row=0, column=1, padx=10, ipady=3)
+    make_label(form, "New Password").grid(row=1, column=0, sticky="w", pady=6)
+    new_entry = make_entry(form, 25, show="*")
+    new_entry.grid(row=1, column=1, padx=10, ipady=3)
+    make_label(form, "Confirm Password").grid(row=2, column=0, sticky="w", pady=6)
+    confirm_entry = make_entry(form, 25, show="*")
+    confirm_entry.grid(row=2, column=1, padx=10, ipady=3)
+
+    def change_password():
+        if old_entry.get() != credentials["password"]:
+            messagebox.showerror("Error", "Old password is wrong")
+        elif len(new_entry.get()) < 4:
+            messagebox.showerror("Error", "New password must have at least 4 characters")
+        elif new_entry.get() != confirm_entry.get():
+            messagebox.showerror("Error", "New password and confirm password do not match")
+        else:
+            credentials["password"] = new_entry.get()
+            for e in (old_entry, new_entry, confirm_entry):
+                e.delete(0, tk.END)
+            messagebox.showinfo("Done", "Password changed successfully")
+
+    make_button(form, "Change Password", RED, change_password).grid(
+        row=3, column=1, sticky="w", padx=10, pady=10)
+    return page
+
+
+# ---------------------------------------------------------------
+# START THE PROGRAM
+# ---------------------------------------------------------------
+root = tk.Tk()
+root.title("Blood Bank Management System")
+root.geometry("1100x680")
+root.minsize(1000, 640)
+
+style = ttk.Style()
+style.theme_use("clam")
+style.configure("Treeview", rowheight=28, font=(FONT, 10),
+                background=WHITE, fieldbackground=WHITE)
+style.configure("Treeview.Heading", background=RED, foreground="white",
+                font=(FONT, 10, "bold"), relief="flat", padding=5)
+style.map("Treeview.Heading", background=[("active", "#8e0000")])
+style.map("Treeview", background=[("selected", "#ffcdd2")],
+          foreground=[("selected", "black")])
+
+login_screen()
+root.mainloop()
